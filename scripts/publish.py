@@ -5,6 +5,7 @@
 
 用法:
     python publish.py --dir <项目目录> --name <仓库名> [--private] [--yes]
+    python publish.py --dir <项目目录> --dry-run        # 只做本地检查，不碰远程
 
 认证优先级（自动降级，全都不用你手抄 Token）:
     1. 环境变量 GITHUB_TOKEN / GH_TOKEN
@@ -18,6 +19,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +27,27 @@ import urllib.error
 import urllib.request
 
 API = "https://api.github.com"
+
+# 提交前必须拦下来的文件名模式（命中即视为敏感）
+SENSITIVE_PATTERNS = [
+    (r"^\.env($|\.)", "环境变量文件"),
+    (r"^\.env\..+$", "环境变量文件"),
+    (r"\.(pem|key|p12|pfx)$", "密钥文件"),
+    (r"^id_rsa", "私钥"),
+    (r"^id_ed25519", "私钥"),
+    (r"^credentials?\.json$", "凭据文件"),
+    (r"^secrets?\.(json|ya?ml|toml)$", "凭据文件"),
+    (r"^\.npmrc$", "npm 凭据"),
+    (r"^\.netrc$", "netrc 凭据"),
+    (r"^\.htpasswd$", "口令文件"),
+    (r"^service-account.*\.json$", "服务账号密钥"),
+    (r"^\.aws/", "AWS 凭据目录"),
+    (r"^\.ssh/", "SSH 密钥目录"),
+]
+
+# GitHub 硬限制：单文件 100MB
+MAX_FILE_BYTES = 100 * 1024 * 1024
+WARN_FILE_BYTES = 50 * 1024 * 1024
 
 
 def log(msg):
@@ -59,7 +82,7 @@ def api(method, path, token, body=None, raw=False):
     req.add_header("Authorization", "Bearer " + token)
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    req.add_header("User-Agent", "alita-publish")
+    req.add_header("User-Agent", "github-deploy-release")
     if data:
         req.add_header("Content-Type", "application/json")
     try:
@@ -114,39 +137,34 @@ def token_from_credential_manager():
     payload = "protocol=https\nhost=github.com\n\n"
     try:
         p = subprocess.run(
-            cmd, input=payload, capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
+            cmd, input=payload, capture_output=True, text=True, encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
         return None, None
-    if p.returncode != 0 or not p.stdout:
-        return None, None
 
-    token = None
-    user = None
-    for line in p.stdout.splitlines():
-        if line.startswith("password="):
-            token = line.split("=", 1)[1].strip()
-        elif line.startswith("username="):
-            user = line.split("=", 1)[1].strip()
-    if not token:
+    if p.returncode != 0:
         return None, None
-    return token, "系统凭据管理器（账号 %s）" % (user or "未知")
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("password="):
+            tok = line[len("password="):].strip()
+            if tok:
+                return tok, "系统凭据管理器"
+    return None, None
 
 
 def get_token():
     for fn in (token_from_env, token_from_gh, token_from_credential_manager):
-        tok, src = fn()
+        try:
+            tok, src = fn()
+        except Exception:
+            tok, src = None, None
         if tok:
             return tok, src
     return None, None
 
 
-# ---------------------------------------------------------------- 仓库
-
-
 def find_existing_repo(token, name):
-    """同名的仓库可能已经存在（重复跑脚本时）。"""
     try:
         status, data = api("GET", "/user/repos?per_page=100", token)
     except RuntimeError:
@@ -157,7 +175,7 @@ def find_existing_repo(token, name):
     return None
 
 
-def ensure_repo(token, name, private, force=False):
+def ensure_repo(token, name, private, force=False, description=None, topics=None):
     repo = find_existing_repo(token, name)
     if repo:
         if force:
@@ -168,12 +186,37 @@ def ensure_repo(token, name, private, force=False):
     body = {
         "name": name,
         "private": bool(private),
-        "description": "Created by alita publish.py",
+        "description": description or "",
         "auto_init": False,  # 关键: 不要 README, 否则和本地提交历史冲突
     }
     status, data = api("POST", "/user/repos", token, body)
     log("仓库已创建: %s" % data["html_url"])
+    if topics:
+        apply_topics(token, name, topics)
     return data
+
+
+def apply_topics(token, name, topics):
+    """给仓库打 topics —— 别人能搜到的关键。"""
+    if isinstance(topics, str):
+        topics = [t.strip() for t in topics.split(",") if t.strip()]
+    topics = [t for t in topics if t][:20]
+    if not topics:
+        return
+    try:
+        api("PUT", "/repos/%s/%s/topics" % (current_login(token), name), token,
+            {"names": topics})
+        log("已设置 topics: %s" % ", ".join(topics))
+    except RuntimeError as e:
+        log("设置 topics 失败（不影响发布）: %s" % e)
+
+
+def current_login(token):
+    try:
+        _, me = api("GET", "/user", token)
+        return me.get("login", "")
+    except RuntimeError:
+        return ""
 
 
 def ensure_gitignore(project_dir):
@@ -203,10 +246,88 @@ def ensure_identity(project_dir):
     return True
 
 
+# ---------------------------------------------------------------- 预检
+
+
+def scan_sensitive(project_dir):
+    """扫描将被提交的文件，找敏感项和大文件。
+
+    返回 (敏感列表, 大文件列表, 跟踪文件数)
+    """
+    sensitive = []
+    large = []
+    tracked = 0
+
+    # 已跟踪文件（git ls-files）
+    try:
+        out = git("ls-files", "-z", cwd=project_dir).stdout or ""
+    except RuntimeError:
+        out = ""
+    tracked_list = [f for f in out.split("\0") if f]
+
+    # 未跟踪但会被 git add . 收进去的文件
+    try:
+        untracked = git("ls-files", "-z", "--others",
+                        "--exclude-standard", cwd=project_dir).stdout or ""
+    except RuntimeError:
+        untracked = ""
+    pending = [f for f in untracked.split("\0") if f]
+
+    for rel in tracked_list + pending:
+        full = os.path.join(project_dir, rel.replace("/", os.sep))
+        if os.path.isdir(full):
+            continue
+        base = os.path.basename(rel)
+        for pat, label in SENSITIVE_PATTERNS:
+            if re.search(pat, base, re.IGNORECASE) or re.search(pat, rel, re.IGNORECASE):
+                sensitive.append((rel, label))
+                break
+        try:
+            size = os.path.getsize(full)
+        except OSError:
+            continue
+        if size > MAX_FILE_BYTES:
+            large.append((rel, size, "超过 GitHub 100MB 硬限制"))
+        elif size > WARN_FILE_BYTES:
+            large.append((rel, size, "超过 50MB，推送会很慢"))
+
+    return sensitive, large, len(tracked_list) + len(pending)
+
+
+def report_precheck(project_dir):
+    """提交前预检。返回 True 表示可以安全继续。"""
+    sensitive, large, total = scan_sensitive(project_dir)
+    log("--- 提交前预检 ---")
+    log("将被提交的文件数: %d" % total)
+
+    if sensitive:
+        log("")
+        log("发现 %d 个疑似敏感文件:" % len(sensitive))
+        for rel, label in sensitive:
+            log("  ! %s  (%s)" % (rel, label))
+        log("")
+        log("处理办法二选一：")
+        log("  1. 把这些文件写进 .gitignore，然后重新运行")
+        log("  2. 如果确实要公开，确认它不是真密钥再继续")
+        log("如果里面是真密钥，即使删掉文件也不够——必须去 GitHub 后台吊销重置。")
+        return False
+
+    if large:
+        log("")
+        log("发现 %d 个大文件:" % len(large))
+        for rel, size, why in large:
+            log("  ! %s  (%.1f MB, %s)" % (rel, size / 1048576.0, why))
+        log("建议用 Git LFS，或把它加进 .gitignore。")
+
+    log("预检通过：没有敏感文件。")
+    return True
+
+
 # ---------------------------------------------------------------- 主流程
 
 
-def publish(project_dir, name, private, force=False):
+def publish(project_dir, name, private, force=False, description=None, topics=None,
+            dry_run=False):
     project_dir = os.path.abspath(project_dir)
     if not os.path.isdir(project_dir):
         log("目录不存在: %s" % project_dir)
@@ -261,7 +382,20 @@ def publish(project_dir, name, private, force=False):
         git("config", "user.email", "%s@users.noreply.github.com" % login, cwd=project_dir)
         log("已用 GitHub 账号设置提交身份: %s" % login)
 
-    # 5. 提交
+    # 5. 预检：敏感文件 + 大文件
+    if not report_precheck(project_dir):
+        log("")
+        log("预检未通过，已停止（没有创建仓库、没有推送）。")
+        return 3
+
+    if dry_run:
+        log("")
+        log("=== dry-run 模式：到此为止 ===")
+        log("以上是真实检查结果，但不会创建仓库、不会推送。")
+        log("去掉 --dry-run 就会真的发布。")
+        return 0
+
+    # 6. 提交
     git("add", ".", cwd=project_dir)
     staged = git("diff", "--cached", "--stat", cwd=project_dir)
     if not (staged.stdout or "").strip():
@@ -273,16 +407,16 @@ def publish(project_dir, name, private, force=False):
             return 1
         log("已提交: %s" % git("log", "--oneline", "-n", "1", cwd=project_dir).stdout.strip())
 
-    # 6. 建仓
+    # 7. 建仓
     try:
-        repo = ensure_repo(token, name, private, force)
+        repo = ensure_repo(token, name, private, force, description, topics)
     except RuntimeError as e:
         log("创建仓库失败: %s" % e)
         return 1
 
     clone_url = repo.get("clone_url") or repo.get("html_url")
 
-    # 7. 关联远程
+    # 8. 关联远程
     remotes = git("remote", cwd=project_dir).stdout
     if "origin" in remotes:
         git("remote", "set-url", "origin", clone_url, cwd=project_dir)
@@ -290,7 +424,7 @@ def publish(project_dir, name, private, force=False):
         git("remote", "add", "origin", clone_url, cwd=project_dir)
     log("已关联远程: %s" % clone_url)
 
-    # 8. 推送
+    # 9. 推送
     p = git("push", "-u", "origin", "main", cwd=project_dir, check=False)
     push_out = ((p.stdout or "") + (p.stderr or "")).strip()
     if p.returncode != 0:
@@ -304,7 +438,7 @@ def publish(project_dir, name, private, force=False):
         return 1
     log(push_out)
 
-    # 9. 回读验证
+    # 10. 回读验证
     local_sha = git("rev-parse", "HEAD", cwd=project_dir).stdout.strip()
     try:
         _, remote_ref = api(
@@ -338,18 +472,23 @@ def main():
     ap.add_argument("--private", action="store_true", help="创建为私有仓库")
     ap.add_argument("--force", action="store_true", help="仓库已存在时也继续")
     ap.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="只做本地预检与推演，不建仓不推送")
+    ap.add_argument("--description", help="仓库描述（建仓时写入）")
+    ap.add_argument("--topics", help="仓库 topics，逗号分隔，例如: git,github,publish")
     args = ap.parse_args()
 
     project_dir = os.path.abspath(args.dir)
     name = args.name or os.path.basename(project_dir.rstrip(os.sep))
-    if not args.yes and sys.stdin.isatty():
+    if not args.yes and not args.dry_run and sys.stdin.isatty():
         vis = "私有" if args.private else "公开"
         ans = input("将创建 %s（%s）并推送，继续? [y/N] " % (name, vis)).strip().lower()
         if ans not in ("y", "yes"):
             log("已取消")
             return 0
     try:
-        return publish(project_dir, name, args.private, args.force)
+        return publish(project_dir, name, args.private, args.force,
+                      args.description, args.topics, args.dry_run)
     except KeyboardInterrupt:
         log("已中断")
         return 130
