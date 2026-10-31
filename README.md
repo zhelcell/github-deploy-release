@@ -1,6 +1,50 @@
 # github-deploy-release
 
-一键把本地项目发布成 GitHub 仓库并推送。跨平台（Windows / macOS / Linux），只用 Python 标准库，不需要 `pip install` 任何东西。
+**作者：李东泽**
+
+把本地项目一键发布成 GitHub 仓库并推送。跨平台（Windows / macOS / Linux），只用 Python 标准库，不需要 `pip install` 任何东西。
+
+## 这是个什么技能
+
+它替你走完「本地目录 → GitHub 上一个能访问的远程仓库」这条完整链路，并且**验证真的推上去了**，而不是 push 命令返回 0 就宣布成功。
+
+**什么时候用它**：你有一个本地项目目录（代码、脚本、笔记都行），想让别人能看到、想在 GitHub 上备份、或者想把某个小工具开源出去。
+
+**它解决的具体麻烦**：
+
+- 新项目忘建 git 仓库、忘了写 `.gitignore`，把 `.env` 和密钥推成公开资产
+- 认证这一步最劝退——不想手抄 Token、不想折腾 `gh auth login`
+- 推完不确定到底成没成，远程仓库还是空的
+
+## 怎么用
+
+**方式一：在 ALITA 里直接说**
+
+```
+把这个项目发到 GitHub
+```
+
+或更具体：`用 github-deploy-release 把 F:\my-project 发布成仓库 my-project`。
+
+**方式二：命令行一条命令**
+
+```bash
+# 先干跑一遍：只做本地检查，不建仓不推送，也不碰网络
+python scripts/publish.py --dir /path/to/your/project --dry-run
+
+# 确认没问题再真发
+python scripts/publish.py --dir /path/to/your/project --name my-project
+```
+
+`--dry-run` 不需要任何 GitHub 凭据，也不会创建任何东西。确认输出没问题后去掉它即可真正建仓推送。
+
+**装进 ALITA**（一次性）：
+
+```
+装技能 https://github.com/zhelcell/github-deploy-release
+```
+
+详细说明见 [INSTALL.md](INSTALL.md)。
 
 ## 它替你做了什么
 

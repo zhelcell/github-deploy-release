@@ -1,6 +1,7 @@
 ---
 name: github-deploy-release
-description: 把本地项目发布到 GitHub——从初始化 git 仓库、首次提交、配置 .gitignore，到建远程仓库、推送分支、回读验证的完整流程。认证自动降级（环境变量 → GitHub CLI → 系统凭据管理器），用户不需要手动抄 Token。当用户说"发到 GitHub""把这个项目开源""上传到仓库""发布到 GitHub""建个仓库""把代码传上去"时触发。
+author: 李东泽
+description: 把本地项目一键发布到 GitHub 的完整流程助手——自动初始化 git 仓库、生成 .gitignore、提交前扫描敏感文件（.env/私钥/大文件）、创建远程仓库、推送分支，并在推送后回读校验本地与远端 SHA 是否一致。认证四级自动降级（环境变量 → GitHub CLI → 系统凭据管理器 → 浏览器登录），用户无需手动抄写 Token。怎么用：把项目目录交给本技能，或直接运行 python scripts/publish.py --dir <项目目录> --name <仓库名>，先加 --dry-run 只做本地预检不外发，确认无误后去掉即可真正建仓推送。当用户说“发到 GitHub”“把这个项目开源”“上传到仓库”“发布到 GitHub”“建个仓库”“把代码传上去”“帮我推送代码”时触发。
 ---
 
 # GitHub 部署发布
