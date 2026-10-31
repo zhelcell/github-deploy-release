@@ -1,0 +1,53 @@
+name: self-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: 语法检查
+        run: python -m py_compile scripts/publish.py
+
+      - name: 跑一遍示例
+        run: python examples/hello-project/hello.py
+
+      - name: dry-run 自检
+        run: python scripts/publish.py --dir examples/hello-project --dry-run
+
+      - name: 检查无个人痕迹（绝对路径 / 真实 Token）
+        run: |
+          set -e
+          if grep -rnE '([A-Za-z]:\\\\Users\\\\|/home/[a-z]+/)' --include='*.py' --include='*.md' --include='*.json' .; then
+            echo "::error::发现写死的本机路径"
+            exit 1
+          fi
+          if grep -rnE 'gh[pousr]_[A-Za-z0-9]{20,}' . ; then
+            echo "::error::发现疑似真实 Token"
+            exit 1
+          fi
+          echo "无个人痕迹"
+
+      - name: .gitignore 覆盖检查
+        run: |
+          set -e
+          for f in .env .env.local id_rsa server.pem credentials.json secrets.yml; do
+            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "::error::$f 被跟踪了，必须加进 .gitignore"
+              exit 1
+            fi
+          done
+          echo "敏感文件均未被跟踪"
+
+      - name: skill.json 合法
+        run: python -c "import json;d=json.load(open('skill.json'));assert d.get('name');print('skill.json OK:', d['name'])"
