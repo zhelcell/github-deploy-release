@@ -342,9 +342,12 @@ def publish(project_dir, name, private, force=False, description=None, topics=No
         return 1
     git("--version", cwd=project_dir, check=False, capture=True)
 
-    # 2. 认证
+    # 2. 认证（dry-run 只做本地推演，不碰远程，所以没凭据也放行）
     token, src = get_token()
-    if not token:
+    login = None
+    if not token and dry_run:
+        log("未检测到 GitHub 凭据（dry-run 模式不影响，继续本地检查）")
+    if not token and not dry_run:
         log("")
         log("找不到可用的 GitHub 凭据。三个办法，任选一个：")
         log("  A. 装 GitHub CLI 并登录（一次性，之后这台电脑就不用再管）:")
@@ -356,16 +359,23 @@ def publish(project_dir, name, private, force=False, description=None, topics=No
         log("  C. 如果你平时用 GitHub Desktop 或 VS Code 登录过，通常已经有凭据，")
         log("     重新跑一次本脚本即可。")
         return 2
-    log("使用凭据来源: %s" % src)
+    if not token:
+        log("（dry-run 不需要凭据；真正发布时会再要求认证）")
+    if token:
+        log("使用凭据来源: %s" % src)
 
-    # 3. 验证 token 有效
-    try:
-        _, me = api("GET", "/user", token)
-    except RuntimeError as e:
-        log("凭据无效: %s" % e)
-        return 2
-    login = me.get("login", "?")
-    log("已登录 GitHub 账号: %s" % login)
+        # 3. 验证 token 有效
+        try:
+            _, me = api("GET", "/user", token)
+        except RuntimeError as e:
+            if dry_run:
+                log("凭据校验未通过（dry-run 模式不影响，继续本地检查）")
+            else:
+                log("凭据无效: %s" % e)
+                return 2
+        else:
+            login = me.get("login", "?")
+            log("已登录 GitHub 账号: %s" % login)
 
     # 4. 初始化本地仓库
     if not os.path.isdir(os.path.join(project_dir, ".git")):
@@ -378,9 +388,10 @@ def publish(project_dir, name, private, force=False, description=None, topics=No
     ensure_gitignore(project_dir)
 
     if not ensure_identity(project_dir):
-        git("config", "user.name", login, cwd=project_dir)
-        git("config", "user.email", "%s@users.noreply.github.com" % login, cwd=project_dir)
-        log("已用 GitHub 账号设置提交身份: %s" % login)
+        if login:
+            git("config", "user.name", login, cwd=project_dir)
+            git("config", "user.email", "%s@users.noreply.github.com" % login, cwd=project_dir)
+            log("已用 GitHub 账号设置提交身份: %s" % login)
 
     # 5. 预检：敏感文件 + 大文件
     if not report_precheck(project_dir):
