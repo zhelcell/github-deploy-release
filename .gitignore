@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.zip
+
+# 示例目录被 publish.py 跑过一次后会留下 .git/，发布技能本体时必须排除
+.git/

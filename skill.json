@@ -1,0 +1,31 @@
+{
+  "name": "github-deploy-release",
+  "version": "1.0.0",
+  "description": "把本地项目发布到 GitHub：初始化、首次提交、配置 .gitignore、建远程仓库、推送、回读验证的完整流程。认证自动降级，用户无需手动抄 Token。",
+  "entrypoint": "SKILL.md",
+  "scripts": [
+    "scripts/publish.py"
+  ],
+  "references": [
+    "references/gitignore-templates.md",
+    "references/troubleshooting.md",
+    "references/publishing-checklist.md"
+  ],
+  "examples": [
+    "examples/hello-project"
+  ],
+  "keywords": [
+    "git",
+    "github",
+    "发布",
+    "部署",
+    "开源",
+    "push",
+    "repository"
+  ],
+  "requirements": {
+    "python": ">=3.8",
+    "git": "true",
+    "third_party_packages": []
+  }
+}
