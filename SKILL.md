@@ -15,6 +15,36 @@ description: 把本地项目发布到 GitHub——从初始化 git 仓库、首�
 - 已有本地 git 仓库，只想推上去
 - "把这个目录做成公开仓库"
 
+## 安装（给第一次用的人）
+
+前置只要两个：**装了 Git** 和 **Python 3.8+**。脚本只用标准库，不需要 pip install。
+
+```bash
+git --version
+python --version
+```
+
+装进 ALITA（推荐，在对话里对助手说）：
+
+```
+装技能 https://github.com/<owner>/github-deploy-release
+```
+
+手动克隆：
+
+```bash
+git clone https://github.com/<owner>/github-deploy-release.git
+```
+
+只想拿走那个发布脚本：
+
+```bash
+git clone --depth 1 https://github.com/<owner>/github-deploy-release.git
+python github-deploy-release/scripts/publish.py --help
+```
+
+完整说明见 `INSTALL.md`。**认证不需要手动配置**——脚本会依次尝试环境变量 → GitHub CLI → 系统凭据管理器；多数人电脑上早就存了 GitHub 账号，直接就能用。
+
 ## 铁律
 
 1. **先看目录，再动手。** 推之前必须确认：哪些文件要传、哪些要排除。密钥、`.env`、`node_modules`、构建产物绝不进仓库。
