@@ -27,19 +27,19 @@ python --version
 装进 ALITA（推荐，在对话里对助手说）：
 
 ```
-装技能 https://github.com/<owner>/github-deploy-release
+装技能 https://github.com/zhelcell/github-deploy-release
 ```
 
 手动克隆：
 
 ```bash
-git clone https://github.com/<owner>/github-deploy-release.git
+git clone https://github.com/zhelcell/github-deploy-release.git
 ```
 
 只想拿走那个发布脚本：
 
 ```bash
-git clone --depth 1 https://github.com/<owner>/github-deploy-release.git
+git clone --depth 1 https://github.com/zhelcell/github-deploy-release.git
 python github-deploy-release/scripts/publish.py --help
 ```
 
